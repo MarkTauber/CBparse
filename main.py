@@ -1,80 +1,106 @@
-import urllib.request                 
-import xml.etree.ElementTree as ET     
-from datetime import timedelta, date  
-import statistics                    
+from datetime import datetime, timedelta
+import xml.etree.ElementTree as ET
+import requests
 
-daymath = 0    
-Valuemath = 0   
-dod = 0
-Fulldata = []
+TIMEOUT = 10
 
-li = [[] for _ in range(90)]
-namem = [[] for _ in range(90)]
 
-while dod < 90:     #цикл 90 дней
-    Datesearch = date.today() - timedelta(days=dod) 
-    date_string = Datesearch.strftime('%d/%m/%Y') 
-    url = "http://www.cbr.ru/scripts/XML_daily_eng.asp?date_req="+ date_string #Генерация ссылки
-    #print("Parsing url: " + url)                           
-    webFile = urllib.request.urlopen(url)       
-    data = webFile.read()            
-    
-    with open("data.xml", "wb") as localFile:   #Дебаг, можно читать из переменной data
-        localFile.write(data)                   
-    
-    lst = []          
-    lsts = []         
-    root = ET.parse('data.xml').getroot()
-    
-    for country in root.findall('Valute'):      #Корень дерева <ValCurs Date="дата" name="Foreign Currency Market">
-        Charcode = country.find('Name').text    #Имя валюты 
-        Value = country.find('Value').text      #Стоимость
-        lst.append(Value)                   
-        lsts.append(Charcode)               
-    
-    d = 0            
-    Fulldata.append(date_string)    
-    
-    while d < 34:  
-        li[daymath].append(lst[d])         
-        namem[daymath].append(lsts[d])     
-        d+=1
-    
-    daymath+=1 
-    dod=dod+1      
-    
-dni = 0  
-dengi = 0
-maxxx = []
+def get_cbr_data(date_req):
+    """
+    Функция для получения данных с API ЦБ РФ.
 
-reportes = open("reports.txt", "w")
-reportes.write("")
-reportes.close() 
-reportes = open("reports.txt", "a")
+    Args:
+        date_req (str): Дата запроса в формате "dd.mm.yyyy".
 
-while dengi < 34: 
+    Returns:
+        dict: Словарь с данными о валютах.
+    """
+    url = f"http://www.cbr.ru/scripts/XML_daily_eng.asp?date_req={date_req}"
+    response = requests.get(url, timeout=TIMEOUT)
 
-    while dni<90:
-        sheesh=li[dni][dengi].replace(",",".") #Форматируем данные
-        maxxx.append(float(sheesh))
-        dni+=1
-        
-    statist = statistics.mean(maxxx)                                  #среднее арифметическое 
-    index1, max_value = max(enumerate(maxxx), key=lambda i_v: i_v[1]) #Получаем максимальное значение и его адрес
-    index2, min_value = min(enumerate(maxxx), key=lambda i_v: i_v[1]) #Получаем миниальное значение и его адрес
-    ass = float('{:.4f}'.format(statist))                             #Чистим выходные данные от мусора
-    
-    print("Aritmetic mean of " + str(namem[0][dengi]) + " is [" + str(ass) + "]") 
-    print("Maxinum of " + str(namem[0][dengi]) + " is [" + str(max_value) + "] at date [" + Fulldata[index1] + "]")   
-    print("Minimum of " + str(namem[0][dengi]) + " is [" + str(min_value) + "] at date [" + Fulldata[index2] + "] \n")  
-    
-    reportes.write("Aritmetic mean of " + str(namem[0][dengi]) + " is [" + str(ass) + "]\n" + "Maxinum of " + 
-    str(namem[0][dengi]) + " is [" + str(max_value) + "] at date [" + Fulldata[index1] + "]\n" + "Minimum of " + 
-    str(namem[0][dengi]) + " is [" + str(min_value) + "] at data [" + Fulldata[index2] + "]\n\n")
-    
-    dengi+=1 
-    dni = 0 
-    maxxx = [] 
-    
-reportes.close() 
-print('Report was created as "report.txt"')
+    if response.status_code == 200:
+        root = ET.fromstring(response.content)
+        currencies = {}
+        for valute in root.iter("Valute"):
+            char_code = valute.find("CharCode").text
+            if char_code not in currencies:
+                currencies[char_code] = {
+                    "NumCode": valute.find("NumCode").text,
+                    "Name": valute.find("Name").text,
+                    "Values": [],
+                }
+            currencies[char_code]["Values"].append(
+                float(valute.find("Value").text.replace(",", "."))
+            )
+        return currencies
+
+    print(
+        f"Ошибка запроса к ЦБ РФ для {date_req}: {response.status_code}"
+    ) 
+    return None
+
+
+def analyze_data(data):
+    """
+    Функция для анализа данных о валютах.
+
+    Args:
+        data (dict): Словарь с данными о валютах.
+
+    Returns:
+        dict: Словарь с результатами анализа.
+    """
+    results = {}
+    for currency, info in data.items():
+        if not info["Values"]:
+            continue
+
+        average = sum(info["Values"]) / len(info["Values"])
+        minimum = min(info["Values"])
+        maximum = max(info["Values"])
+
+        min_date_index = info["Values"].index(minimum)
+        max_date_index = info["Values"].index(maximum)
+
+        start_date = datetime.now() - timedelta(
+            days=len(info["Values"])
+        )  # Correct calculation
+        min_date = (start_date + timedelta(days=min_date_index)).strftime("%d.%m.%Y")
+        max_date = (start_date + timedelta(days=max_date_index)).strftime("%d.%m.%Y")
+        results[currency] = {
+            "average": average,
+            "minimum": minimum,
+            "maximum": maximum,
+            "min_date": min_date,
+            "max_date": max_date,
+        }
+    return results
+
+
+# Получаем данные за последние 90 дней
+today = datetime.now()
+data = {}
+for i in range(90):
+    current_date = today - timedelta(days=i)
+    date_str = current_date.strftime("%d.%m.%Y")
+    day_data = get_cbr_data(date_str)
+    if day_data:
+        for currency in day_data:
+            if currency not in data:
+                data[currency] = {
+                    "NumCode": day_data[currency]["NumCode"],
+                    "Name": day_data[currency]["Name"],
+                    "Values": [],
+                }
+            data[currency]["Values"].extend(day_data[currency]["Values"])
+
+# Анализ данных
+analysis_results = analyze_data(data)
+
+# Вывод результатов
+for currency, result in analysis_results.items():
+    print(f"Валюта: {currency} ({data[currency]['Name']})")
+    print(f"Среднее: {result['average']:.4f}")
+    print(f"Минимум: {result['minimum']:.4f} ({result['min_date']})")
+    print(f"Максимум: {result['maximum']:.4f} ({result['max_date']})")
+    print("-" * 20)
